@@ -14,8 +14,22 @@ import nltk
 
 # ---------------------------- Configuration ---------------------------- #
 
-# Download NLTK data (only the first time)
-nltk.download('vader_lexicon')
+# Define NLTK data directory
+nltk_data_dir = os.path.join(os.path.expanduser("~"), "nltk_data")
+
+if not os.path.exists(nltk_data_dir):
+    os.makedirs(nltk_data_dir)
+
+nltk.data.path.append(nltk_data_dir)
+
+# Download vader_lexicon if not already present
+try:
+    nltk.data.find('sentiment/vader_lexicon.zip')
+except LookupError:
+    nltk.download('vader_lexicon', download_dir=nltk_data_dir)
+
+# Initialize Sentiment Analyzer
+sentiment_analyzer = SentimentIntensityAnalyzer()
 
 # Cache directories
 CACHE_DIR = "cache"
@@ -28,9 +42,6 @@ if not os.path.exists(HISTORICAL_DIR):
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
-# Sentiment Analyzer
-sentiment_analyzer = SentimentIntensityAnalyzer()
 
 
 # ---------------------------- Functions ---------------------------- #
@@ -149,8 +160,12 @@ def extract_game_info(game, app_details):
     info['Release Date'] = app_details.get('release_date', {}).get('date', '')
     genres = app_details.get('genres', [])
     info['Genres'] = ', '.join([genre['description'] for genre in genres]) if genres else 'Unknown'
+
+    # Sanitize Developer Names
     developers = app_details.get('developers', [])
-    info['Developers'] = ', '.join(developers) if developers else 'Unknown'
+    sanitized_developers = [dev.replace("Ltd.", "").replace("Inc.", "").strip() for dev in developers]
+    info['Developers'] = ', '.join(sanitized_developers) if sanitized_developers else 'Unknown'
+
     publishers = app_details.get('publishers', [])
     info['Publishers'] = ', '.join(publishers) if publishers else 'Unknown'
     info['Short Description'] = app_details.get('short_description', '').replace('\n', ' ').replace('\r', ' ')
@@ -225,19 +240,27 @@ def calculate_metrics(df):
     metrics['Total Games'] = df.shape[0]
     metrics['Total Playtime (Hours)'] = round(df['Playtime (minutes)'].sum() / 60, 2)
     metrics['Average Playtime per Game (Hours)'] = round((df['Playtime (minutes)'].sum() / 60) / df.shape[0], 2)
+
     # Most Played Genre
     genre_series = df['Genres'].str.split(', ').explode()
     metrics['Most Played Genre'] = genre_series.mode().values[0] if not genre_series.empty else 'N/A'
+
     # Top Developer
     developer_series = df['Developers'].str.split(', ').explode()
+    # Exclude unwanted substrings if any remain
+    unwanted_substrings = ['Ltd', 'Inc', 'LLC']
+    developer_series = developer_series[~developer_series.isin(unwanted_substrings)]
     metrics['Top Developer'] = developer_series.mode().values[0] if not developer_series.empty else 'N/A'
+
     # Top Publisher
     publisher_series = df['Publishers'].str.split(', ').explode()
     metrics['Top Publisher'] = publisher_series.mode().values[0] if not publisher_series.empty else 'N/A'
+
     # Platform Distribution
     platforms = df['Platforms'].str.split(', ').explode()
     platform_counts = platforms.value_counts().to_dict()
     metrics['Platform Distribution'] = platform_counts
+
     return metrics
 
 
@@ -308,17 +331,17 @@ def get_recommendations(df, game_name, cosine_sim, indices):
 
     idx = indices[game_name]
     sim_scores = list(enumerate(cosine_sim[idx]))
-    # Sort by similarity score
+    # Sort by similarity score in descending order
     sim_scores = sorted(sim_scores, key=lambda x: x[1], reverse=True)
-    # Get top 10 to filter later
+    # Get top 10 similar games excluding the selected game itself
     sim_scores = sim_scores[1:11]
     game_indices = [i[0] for i in sim_scores]
     recommended_games = df.iloc[game_indices][['Name', 'Genres', 'Playtime (minutes)', 'Review Sentiment']]
 
-    # Filter recommendations with positive or neutral sentiment
+    # Optionally, filter recommendations based on playtime or sentiment
     recommended_games = recommended_games[recommended_games['Review Sentiment'].isin(['Positive', 'Neutral'])]
 
-    # Limit to top 5
+    # Return top 5 recommendations
     return recommended_games.head(5)
 
 
@@ -365,16 +388,22 @@ def export_visualizations(fig, filename):
     """
     Export Plotly figures as PNG images.
     """
-    fig.write_image(filename)
-    st.success(f"Visualization exported as {filename}")
+    try:
+        fig.write_image(filename)
+        st.success(f"Visualization exported as {filename}")
+    except Exception as e:
+        st.error(f"Error exporting visualization: {e}")
 
 
 def export_data(df, filename):
     """
     Export DataFrame to CSV.
     """
-    df.to_csv(filename, index=False)
-    st.success(f"Data exported as {filename}")
+    try:
+        df.to_csv(filename, index=False)
+        st.success(f"Data exported as {filename}")
+    except Exception as e:
+        st.error(f"Error exporting data: {e}")
 
 
 # Function to fetch app details with progress bar and estimated time
