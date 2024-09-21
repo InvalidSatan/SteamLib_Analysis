@@ -586,8 +586,8 @@ def main():
 
         # Release Year Filter
         df['Release Year'] = pd.to_datetime(df['Release Date'], errors='coerce').dt.year
-        min_year = int(df['Release Year'].min()) if not df['Release Year'].min() is np.nan else 2000
-        max_year = int(df['Release Year'].max()) if not df['Release Year'].max() is np.nan else 2025
+        min_year = int(df['Release Year'].min()) if not pd.isna(df['Release Year'].min()) else 2000
+        max_year = int(df['Release Year'].max()) if not pd.isna(df['Release Year'].max()) else 2025
         release_year_range = st.sidebar.slider(
             "Select Release Year Range",
             min_value=min_year,
