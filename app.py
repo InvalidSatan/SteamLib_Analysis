@@ -147,7 +147,7 @@ def get_app_details_with_cache(app_id, cache, api_key=None, max_retries=5, reque
 
 def extract_game_info(game, app_details):
     """
-    Extracts relevant information from the game and its app details.
+    Extracts relevant information from the game and its app details, including tags.
     """
     info = {}
     info['App ID'] = game.get('appid', '')
@@ -158,12 +158,13 @@ def extract_game_info(game, app_details):
 
     # From app details
     info['Release Date'] = app_details.get('release_date', {}).get('date', '')
-    genres = app_details.get('genres', [])
-    info['Genres'] = ', '.join([genre['description'] for genre in genres]) if genres else 'Unknown'
+    tags = app_details.get('categories', [])
+    info['Tags'] = ', '.join([tag['description'] for tag in tags]) if tags else 'Unknown'
 
     # Sanitize Developer Names
     developers = app_details.get('developers', [])
-    sanitized_developers = [dev.replace("Ltd.", "").replace("Inc.", "").strip() for dev in developers]
+    sanitized_developers = [dev.replace("Ltd.", "").replace("Inc.", "").replace("LLC", "").strip() for dev in
+                            developers]
     info['Developers'] = ', '.join(sanitized_developers) if sanitized_developers else 'Unknown'
 
     publishers = app_details.get('publishers', [])
@@ -234,32 +235,29 @@ def analyze_reviews(game_name):
 
 def calculate_metrics(df):
     """
-    Calculate various metrics for the dashboard.
+    Calculate enhanced metrics that provide deeper insights into the user's gaming habits.
     """
     metrics = {}
     metrics['Total Games'] = df.shape[0]
     metrics['Total Playtime (Hours)'] = round(df['Playtime (minutes)'].sum() / 60, 2)
-    metrics['Average Playtime per Game (Hours)'] = round((df['Playtime (minutes)'].sum() / 60) / df.shape[0], 2)
 
-    # Most Played Genre
-    genre_series = df['Genres'].str.split(', ').explode()
-    metrics['Most Played Genre'] = genre_series.mode().values[0] if not genre_series.empty else 'N/A'
+    # Top Played Tags
+    tag_series = df['Tags'].str.split(', ').explode()
+    tag_playtimes = df.explode('Tags').groupby('Tags')['Playtime (minutes)'].sum().sort_values(ascending=False)
+    metrics['Top Played Tags'] = tag_playtimes.head(5).index.tolist() if not tag_playtimes.empty else ['N/A']
 
-    # Top Developer
-    developer_series = df['Developers'].str.split(', ').explode()
-    # Exclude unwanted substrings if any remain
-    unwanted_substrings = ['Ltd', 'Inc', 'LLC']
-    developer_series = developer_series[~developer_series.isin(unwanted_substrings)]
-    metrics['Top Developer'] = developer_series.mode().values[0] if not developer_series.empty else 'N/A'
+    # Playtime Concentration (Top 5 Games)
+    top_5_playtime = df.nlargest(5, 'Playtime (minutes)')['Playtime (minutes)'].sum()
+    total_playtime = df['Playtime (minutes)'].sum()
+    metrics['Top 5 Playtime Concentration (%)'] = round((top_5_playtime / total_playtime) * 100, 2)
 
-    # Top Publisher
-    publisher_series = df['Publishers'].str.split(', ').explode()
-    metrics['Top Publisher'] = publisher_series.mode().values[0] if not publisher_series.empty else 'N/A'
+    # Playtime Diversity (Variety Index)
+    tag_counts = tag_series.value_counts(normalize=True)
+    variety_index = -np.sum(tag_counts * np.log(tag_counts))  # Entropy-based diversity index
+    metrics['Variety Index'] = round(variety_index, 2)
 
-    # Platform Distribution
-    platforms = df['Platforms'].str.split(', ').explode()
-    platform_counts = platforms.value_counts().to_dict()
-    metrics['Platform Distribution'] = platform_counts
+    # Average Playtime per Game Session
+    metrics['Avg Playtime per Game Session (Minutes)'] = round(df['Playtime (minutes)'].mean(), 2)
 
     return metrics
 
@@ -271,17 +269,19 @@ def plot_playtime_distribution(df):
     df['Playtime (hours)'] = df['Playtime (minutes)'] / 60
     fig = px.histogram(df, x='Playtime (hours)', nbins=50, title='Playtime Distribution (Hours)',
                        labels={'Playtime (hours)': 'Playtime (Hours)'})
+    fig.update_layout(template="plotly_dark")
     return fig
 
 
 def plot_genre_distribution(df):
     """
-    Plot the distribution of genres.
+    Plot the distribution of genres based on tags.
     """
-    genre_counts = df['Genres'].str.split(', ').explode().value_counts().reset_index()
-    genre_counts.columns = ['Genre', 'Count']
-    fig = px.bar(genre_counts, x='Genre', y='Count', title='Games per Genre',
-                 labels={'Count': 'Number of Games', 'Genre': 'Genre'})
+    tag_counts = df['Tags'].str.split(', ').explode().value_counts().reset_index()
+    tag_counts.columns = ['Tag', 'Count']
+    fig = px.bar(tag_counts, x='Tag', y='Count', title='Games per Tag',
+                 labels={'Count': 'Number of Games', 'Tag': 'Tag'})
+    fig.update_layout(template="plotly_dark")
     return fig
 
 
@@ -295,6 +295,7 @@ def plot_playtime_over_time(df):
     playtime_per_year['Playtime (hours)'] = playtime_per_year['Playtime (minutes)'] / 60
     fig = px.line(playtime_per_year, x='Year', y='Playtime (hours)', title='Total Playtime Over Years',
                   labels={'Playtime (hours)': 'Total Playtime (Hours)', 'Year': 'Release Year'})
+    fig.update_layout(template="plotly_dark")
     return fig
 
 
@@ -306,6 +307,8 @@ def plot_platform_distribution(df):
     platform_counts.columns = ['Platform', 'Count']
     fig = px.pie(platform_counts, names='Platform', values='Count', title='Platform Distribution',
                  hole=0.3)
+    fig.update_traces(textposition='inside', textinfo='percent+label')
+    fig.update_layout(template="plotly_dark")
     return fig
 
 
@@ -314,7 +317,7 @@ def prepare_recommendation_model(df):
     Prepare the TF-IDF matrix and cosine similarity for recommendations.
     """
     tfidf = TfidfVectorizer(stop_words='english')
-    df['combined_features'] = df['Genres'] + ' ' + df['Developers'] + ' ' + df['Publishers'] + ' ' + df[
+    df['combined_features'] = df['Tags'] + ' ' + df['Developers'] + ' ' + df['Publishers'] + ' ' + df[
         'Short Description']
     tfidf_matrix = tfidf.fit_transform(df['combined_features'])
     cosine_sim = cosine_similarity(tfidf_matrix, tfidf_matrix)
@@ -322,26 +325,18 @@ def prepare_recommendation_model(df):
     return cosine_sim, indices
 
 
-def get_recommendations(df, game_name, cosine_sim, indices):
+def get_tag_based_recommendations(df, top_tags):
     """
-    Get game recommendations based on cosine similarity.
+    Generate recommendations based on the user's top-played tags and engagement patterns.
     """
-    if game_name not in indices:
-        return pd.DataFrame()
+    # Filter games by top tags, prioritizing those with positive sentiment
+    recommended_games = df[df['Tags'].apply(lambda x: any(tag in x for tag in top_tags))]
+    recommended_games = recommended_games[recommended_games['Review Sentiment'] == 'Positive']
 
-    idx = indices[game_name]
-    sim_scores = list(enumerate(cosine_sim[idx]))
-    # Sort by similarity score in descending order
-    sim_scores = sorted(sim_scores, key=lambda x: x[1], reverse=True)
-    # Get top 10 similar games excluding the selected game itself
-    sim_scores = sim_scores[1:11]
-    game_indices = [i[0] for i in sim_scores]
-    recommended_games = df.iloc[game_indices][['Name', 'Genres', 'Playtime (minutes)', 'Review Sentiment']]
+    # Sort by playtime and engagement (recent playtime or session frequency could be included)
+    recommended_games = recommended_games.sort_values(by=['Playtime (minutes)'], ascending=False)
 
-    # Optionally, filter recommendations based on playtime or sentiment
-    recommended_games = recommended_games[recommended_games['Review Sentiment'].isin(['Positive', 'Neutral'])]
-
-    # Return top 5 recommendations
+    # Return the top 5 recommendations based on tag match and playtime
     return recommended_games.head(5)
 
 
@@ -381,6 +376,7 @@ def plot_playtime_trends(history):
     df_sum['Total Playtime (hours)'] = df_sum['Total Playtime (minutes)'] / 60
     fig = px.line(df_sum, x='Timestamp', y='Total Playtime (hours)', title='Total Playtime Over Time',
                   labels={'Timestamp': 'Timestamp', 'Total Playtime (hours)': 'Total Playtime (Hours)'})
+    fig.update_layout(template="plotly_dark")
     st.plotly_chart(fig, use_container_width=True)
 
 
@@ -447,8 +443,52 @@ def fetch_app_details_with_progress(owned_games, cache, api_key):
 # ---------------------------- Main Application ---------------------------- #
 
 def main():
-    st.set_page_config(page_title="Steam Library Analysis Dashboard", layout="wide")
-    st.title("🎮 Steam Game Library Analysis Dashboard")
+    # Apply custom CSS for Warhammer 40k Nurgle theme
+    st.markdown(
+        """
+        <style>
+        body {
+            background-color: #1a1a1a;
+            color: #d4af37;
+        }
+        .css-18e3th9 {
+            background-color: #262626;
+        }
+        .css-1aumxhk {
+            background-color: #262626;
+        }
+        .stButton>button {
+            background-color: #6b8e23;
+            color: white;
+        }
+        .stTextInput>div>div>input {
+            background-color: #333333;
+            color: #d4af37;
+        }
+        .stDataFrame div {
+            color: #d4af37;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True
+    )
+
+    # Set page configuration
+    st.set_page_config(page_title="Steam Library Analysis Dashboard", layout="wide", page_icon="🎮")
+
+    # Title and Header Image
+    st.markdown(
+        """
+        <h1 style='text-align: center; color: #d4af37;'>🎮 Steam Game Library Analysis Dashboard</h1>
+        """,
+        unsafe_allow_html=True
+    )
+
+    # Optional: Add a themed banner image
+    st.image(
+        "https://i.imgur.com/8YqUQmX.png",  # Replace with a Warhammer 40k Nurgle-themed image URL
+        use_column_width=True
+    )
 
     # User Inputs
     st.sidebar.header("User Input")
@@ -519,9 +559,9 @@ def main():
         # Sidebar Filters
         st.sidebar.header("Filter Options")
 
-        # Genre Filter
-        genres = df['Genres'].str.split(', ').explode().unique()
-        selected_genres = st.sidebar.multiselect("Select Genres", options=sorted(genres), default=sorted(genres))
+        # Tag Filter
+        tags = df['Tags'].str.split(', ').explode().unique()
+        selected_tags = st.sidebar.multiselect("Select Tags", options=sorted(tags), default=sorted(tags))
 
         # Playtime Filter
         min_playtime = float(df['Playtime (minutes)'].min() / 60)
@@ -546,7 +586,7 @@ def main():
 
         # Apply Filters
         filtered_df = df[
-            df['Genres'].str.contains('|'.join(selected_genres)) &
+            df['Tags'].str.contains('|'.join(selected_tags)) &
             (df['Playtime (minutes)'] / 60 >= playtime_range[0]) &
             (df['Playtime (minutes)'] / 60 <= playtime_range[1]) &
             (df['Release Year'] >= release_year_range[0]) &
@@ -561,10 +601,10 @@ def main():
         col1, col2, col3, col4, col5, col6 = st.columns(6)
         col1.metric("Total Games", metrics['Total Games'])
         col2.metric("Total Playtime (Hours)", metrics['Total Playtime (Hours)'])
-        col3.metric("Avg Playtime/Game (Hours)", metrics['Average Playtime per Game (Hours)'])
-        col4.metric("Most Played Genre", metrics['Most Played Genre'])
-        col5.metric("Top Developer", metrics['Top Developer'])
-        col6.metric("Top Publisher", metrics['Top Publisher'])
+        col3.metric("Top 5 Playtime (%)", f"{metrics['Top 5 Playtime Concentration (%)']}%")
+        col4.metric("Variety Index", metrics['Variety Index'])
+        col5.metric("Avg Playtime/Session (Min)", metrics['Avg Playtime per Game Session (Minutes)'])
+        col6.metric("Top Played Tags", ', '.join(metrics['Top Played Tags']))
 
         # Visualizations
         st.markdown("### 📈 Visualizations")
@@ -595,21 +635,20 @@ def main():
         # Prepare Recommendation Model
         cosine_sim, indices = prepare_recommendation_model(filtered_df)
 
-        # Recommendation Input
-        selected_game = st.selectbox("Select a Game to Get Recommendations", options=filtered_df['Name'])
+        # Recommendation based on Top Played Tags
+        top_tags = metrics['Top Played Tags']
+        recommendations = get_tag_based_recommendations(filtered_df, top_tags)
 
-        if selected_game:
-            recommendations = get_recommendations(filtered_df, selected_game, cosine_sim, indices)
-            if not recommendations.empty:
-                st.write("**Recommended Games:**")
-                st.table(recommendations)
-            else:
-                st.write("No recommendations found.")
+        if not recommendations.empty:
+            st.table(recommendations[['Name', 'Tags', 'Playtime (minutes)', 'Review Sentiment']])
+        else:
+            st.write("No recommendations found based on your top tags.")
 
         # Games Table
         st.markdown("### 🕹️ Games Table")
-        st.dataframe(filtered_df[['Name', 'Genres', 'Playtime (minutes)', 'Release Date', 'Developers', 'Publishers',
-                                  'Platforms', 'Achievements', 'Review Sentiment']])
+        st.dataframe(filtered_df[
+                         ['Name', 'Tags', 'Playtime (minutes)', 'Release Date', 'Developers', 'Publishers', 'Platforms',
+                          'Achievements', 'Review Sentiment']])
 
         # Search Functionality
         st.markdown("### 🔍 Search Games")
@@ -617,7 +656,7 @@ def main():
         if search_query:
             search_results = filtered_df[filtered_df['Name'].str.contains(search_query, case=False, na=False)]
             st.dataframe(search_results[
-                             ['Name', 'Genres', 'Playtime (minutes)', 'Release Date', 'Developers', 'Publishers',
+                             ['Name', 'Tags', 'Playtime (minutes)', 'Release Date', 'Developers', 'Publishers',
                               'Platforms', 'Achievements', 'Review Sentiment']])
 
         # Additional Metrics or Visualizations
@@ -627,12 +666,13 @@ def main():
         with col11:
             # Achievement Analysis (if available)
             achievement_data = filtered_df['Achievements'].dropna()
-            if not achievement_data.empty:
+            if not achievement_data.empty and achievement_data.iloc[0] != 'N/A':
                 achievement_counts = achievement_data.value_counts().head(10).reset_index()
                 achievement_counts.columns = ['Achievement Status', 'Count']
                 fig_achievements = px.bar(achievement_counts, x='Achievement Status', y='Count',
                                           title='Achievement Status Distribution',
                                           labels={'Count': 'Number of Games', 'Achievement Status': 'Status'})
+                fig_achievements.update_layout(template="plotly_dark")
                 st.plotly_chart(fig_achievements, use_container_width=True)
             else:
                 st.write("No achievement data available.")
@@ -644,6 +684,8 @@ def main():
             fig_sentiment = px.pie(sentiment_counts, names='Sentiment', values='Count',
                                    title='User Review Sentiment Distribution',
                                    hole=0.3)
+            fig_sentiment.update_traces(textposition='inside', textinfo='percent+label')
+            fig_sentiment.update_layout(template="plotly_dark")
             st.plotly_chart(fig_sentiment, use_container_width=True)
 
         # Export Options
