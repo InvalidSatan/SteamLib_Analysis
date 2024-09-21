@@ -14,6 +14,13 @@ import nltk
 
 # ---------------------------- Configuration ---------------------------- #
 
+# ---------------------------- Set Page Config First ---------------------------- #
+st.set_page_config(
+    page_title="Steam Library Analysis Dashboard",
+    layout="wide",
+    page_icon="🎮"
+)
+
 # Initialize logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -450,39 +457,6 @@ def fetch_app_details_with_progress(owned_games, cache):
 # ---------------------------- Main Application ---------------------------- #
 
 def main():
-    # Apply custom CSS for Warhammer 40k Nurgle theme
-    st.markdown(
-        """
-        <style>
-        body {
-            background-color: #1a1a1a;
-            color: #d4af37;
-        }
-        .css-18e3th9 {
-            background-color: #262626;
-        }
-        .css-1aumxhk {
-            background-color: #262626;
-        }
-        .stButton>button {
-            background-color: #6b8e23;
-            color: white;
-        }
-        .stTextInput>div>div>input {
-            background-color: #333333;
-            color: #d4af37;
-        }
-        .stDataFrame div {
-            color: #d4af37;
-        }
-        </style>
-        """,
-        unsafe_allow_html=True
-    )
-
-    # Set page configuration
-    st.set_page_config(page_title="Steam Library Analysis Dashboard", layout="wide", page_icon="🎮")
-
     # Title and Header Image
     st.markdown(
         """
@@ -575,8 +549,10 @@ def main():
         selected_tags = st.sidebar.multiselect("Select Tags", options=sorted(tags), default=sorted(tags))
 
         # Playtime Filter
-        min_playtime = float(df['Playtime (minutes)'].min() / 60)
-        max_playtime = float(df['Playtime (minutes)'].max() / 60)
+        min_playtime = float(df['Playtime (minutes)'].min() / 60) if not df[
+            'Playtime (minutes)'].isnull().all() else 0.0
+        max_playtime = float(df['Playtime (minutes)'].max() / 60) if not df[
+            'Playtime (minutes)'].isnull().all() else 0.0
         playtime_range = st.sidebar.slider(
             "Select Playtime Range (Hours)",
             min_value=0.0,
