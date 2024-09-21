@@ -14,7 +14,11 @@ import nltk
 
 # ---------------------------- Configuration ---------------------------- #
 
-# Define NLTK data directory
+# Initialize logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Define NLTK data directory for Heroku
 nltk_data_dir = os.path.join(os.path.expanduser("~"), "nltk_data")
 
 if not os.path.exists(nltk_data_dir):
@@ -38,10 +42,6 @@ if not os.path.exists(CACHE_DIR):
     os.makedirs(CACHE_DIR)
 if not os.path.exists(HISTORICAL_DIR):
     os.makedirs(HISTORICAL_DIR)
-
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
 
 
 # ---------------------------- Functions ---------------------------- #
@@ -76,7 +76,7 @@ def get_owned_games(api_key, steam_id):
         return []
 
 
-def get_app_details(app_id, api_key=None, max_retries=5, request_delay=1.0):
+def get_app_details(app_id, max_retries=5, request_delay=1.0):
     """
     Fetches detailed information for a specific app/game using the Steam Store API.
     Implements exponential backoff in case of rate limiting.
@@ -133,14 +133,14 @@ def save_cache(cache, cache_path):
         json.dump(cache, f, ensure_ascii=False, indent=4)
 
 
-def get_app_details_with_cache(app_id, cache, api_key=None, max_retries=5, request_delay=1.0):
+def get_app_details_with_cache(app_id, cache, max_retries=5, request_delay=1.0):
     """
     Fetch app details using cache to minimize API calls.
     """
     if str(app_id) in cache:
         return cache[str(app_id)]
 
-    app_details = get_app_details(app_id, api_key, max_retries, request_delay)
+    app_details = get_app_details(app_id, max_retries, request_delay)
     cache[str(app_id)] = app_details
     return app_details
 
@@ -249,15 +249,17 @@ def calculate_metrics(df):
     # Playtime Concentration (Top 5 Games)
     top_5_playtime = df.nlargest(5, 'Playtime (minutes)')['Playtime (minutes)'].sum()
     total_playtime = df['Playtime (minutes)'].sum()
-    metrics['Top 5 Playtime Concentration (%)'] = round((top_5_playtime / total_playtime) * 100, 2)
+    metrics['Top 5 Playtime Concentration (%)'] = round((top_5_playtime / total_playtime) * 100,
+                                                        2) if total_playtime > 0 else 0.0
 
     # Playtime Diversity (Variety Index)
     tag_counts = tag_series.value_counts(normalize=True)
     variety_index = -np.sum(tag_counts * np.log(tag_counts))  # Entropy-based diversity index
-    metrics['Variety Index'] = round(variety_index, 2)
+    metrics['Variety Index'] = round(variety_index, 2) if not np.isnan(variety_index) else 0.0
 
     # Average Playtime per Game Session
-    metrics['Avg Playtime per Game Session (Minutes)'] = round(df['Playtime (minutes)'].mean(), 2)
+    metrics['Avg Playtime per Game Session (Minutes)'] = round(df['Playtime (minutes)'].mean(), 2) if not df[
+        'Playtime (minutes)'].empty else 0.0
 
     return metrics
 
@@ -403,11 +405,16 @@ def export_data(df, filename):
 
 
 # Function to fetch app details with progress bar and estimated time
-def fetch_app_details_with_progress(owned_games, cache, api_key):
+def fetch_app_details_with_progress(owned_games, cache):
     """
     Fetch detailed information for each game in the user's library,
     showing progress and estimated time to completion.
     """
+    api_key = st.session_state.get('api_key')
+    if not api_key:
+        st.error("API Key not found in session state.")
+        return []
+
     games_info = []
     total_games = len(owned_games)
     start_time = time.time()
@@ -429,7 +436,7 @@ def fetch_app_details_with_progress(owned_games, cache, api_key):
             f"Fetching data for {index}/{total_games} games... Estimated time remaining: {minutes}m {seconds}s")
 
         # Fetch app details
-        app_details = get_app_details_with_cache(app_id, cache, api_key)
+        app_details = get_app_details_with_cache(app_id, cache)
         game_info = extract_game_info(game, app_details)
         games_info.append(game_info)
         time.sleep(1.0)  # Respect rate limits
@@ -497,6 +504,10 @@ def main():
     refresh_data = st.sidebar.button("Fetch/Refresh Data")
     upload_history = st.sidebar.file_uploader("Upload Previous Playtime CSV for Historical Analysis", type=["csv"])
 
+    # Store API key in session state for use in functions
+    if api_key:
+        st.session_state['api_key'] = api_key
+
     if refresh_data:
         if not api_key or not steam_id:
             st.sidebar.error("Please enter both Steam API Key and Steam ID64.")
@@ -507,7 +518,7 @@ def main():
                     # Initialize cache for this session
                     cache_path = os.path.join(CACHE_DIR, f"{steam_id}_cache.json")
                     cache = load_cache(cache_path)
-                    games_info = fetch_app_details_with_progress(owned_games, cache, api_key)
+                    games_info = fetch_app_details_with_progress(owned_games, cache)
 
                     # Save cache
                     save_cache(cache, cache_path)
@@ -529,7 +540,7 @@ def main():
                 cache = load_cache(cache_path)
                 owned_games = get_owned_games(api_key, steam_id)
                 if owned_games:
-                    games_info = fetch_app_details_with_progress(owned_games, cache, api_key)
+                    games_info = fetch_app_details_with_progress(owned_games, cache)
 
                     # Save cache
                     save_cache(cache, cache_path)
@@ -575,8 +586,8 @@ def main():
 
         # Release Year Filter
         df['Release Year'] = pd.to_datetime(df['Release Date'], errors='coerce').dt.year
-        min_year = int(df['Release Year'].min())
-        max_year = int(df['Release Year'].max())
+        min_year = int(df['Release Year'].min()) if not df['Release Year'].min() is np.nan else 2000
+        max_year = int(df['Release Year'].max()) if not df['Release Year'].max() is np.nan else 2025
         release_year_range = st.sidebar.slider(
             "Select Release Year Range",
             min_value=min_year,
